@@ -72,3 +72,15 @@ def test_read_and_write_clients_differ(state: MockXDRState, client) -> None:
         json={"disposition_id": "x"},
     )
     assert r2.status_code != 401
+
+
+def test_client_header_does_not_bypass_token(state: MockXDRState, client) -> None:
+    # X-Mock-Client header must NOT authorize without a valid bearer token.
+    r = client.post(
+        "/mock-xdr/v1/dispositions",
+        headers={"X-Mock-Client": "write"},
+        json={"disposition_id": "x"},
+    )
+    assert r.status_code == 401
+    r2 = client.get("/mock-xdr/v1/incidents", headers={"X-Mock-Client": "read"})
+    assert r2.status_code == 401

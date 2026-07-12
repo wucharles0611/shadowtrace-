@@ -185,6 +185,7 @@ class DispositionAttempt:
     active: bool = True
     provider_job_id: str | None = None
     source_record_id: str = ""
+    command_payload_hash: str = ""
 
     @property
     def latest_status(self) -> WritebackStatus | None:
@@ -567,11 +568,19 @@ class MockXDRState:
                 error_code="unauthorized_field",
             )
 
+        command_payload_hash = payload_hash(raw)
         idem_hash = idempotency_key_hash(command.idempotency_key)
         existing_id = self.disposition_by_idem_hash.get(idem_hash)
         if existing_id is not None:
             attempt = self.disposition_by_id[existing_id]
-            # Same idempotency key → same acceptance result
+            # Same idempotency key MUST carry the same payload; reuse with a
+            # different command is a caller bug (masks outbox regressions).
+            prior_hash = attempt.command_payload_hash
+            if prior_hash and prior_hash != command_payload_hash:
+                raise MockValidationError(
+                    "idempotency key reused with a different payload",
+                    error_code="idempotency_key_reuse",
+                )
             return attempt.receipts[-1]
 
         locator = command.source_locator
@@ -614,6 +623,7 @@ class MockXDRState:
                 receipts=[receipt],
                 active=False,
                 source_record_id=receipt.source_record_id,
+                command_payload_hash=command_payload_hash,
             )
             self.disposition_by_id[command.disposition_id] = attempt
             self.disposition_by_idem_hash[idem_hash] = command.disposition_id
@@ -679,24 +689,11 @@ class MockXDRState:
                 terminal_writeback_status=WritebackStatus.CONFIRMED,
             )
         else:
-            # Sync path: do NOT self-confirm instantly from write alone —
-            # require an explicit readback confirm step for CONFIRMED.
-            # First receipt is ACCEPTED; callers confirm via control/readback.
+            # Sync path: do NOT self-confirm instantly from write alone, and do
+            # NOT mutate the source object's disposition yet. The write is only
+            # ACCEPTED; the authoritative source_disposition transition happens
+            # in confirm_via_readback (provider truth), never on accept.
             status = WritebackStatus.ACCEPTED
-            if command.intent_kind is DispositionIntentKind.EVENT_STATUS_UPDATE:
-                # Apply disposition on object only after accept; confirm via readback API.
-                params = command.operation_params
-                target_disp = getattr(params, "target_disposition", None)
-                if target_disp is not None:
-                    try:
-                        self.transition_source_disposition(
-                            kind,
-                            object_id,
-                            target_disp,
-                            allow_unknown_recovery=True,
-                        )
-                    except MockValidationError:
-                        status = WritebackStatus.FAILED
 
         receipt = DispositionReceipt(
             writeback_id=writeback_id,
@@ -724,12 +721,49 @@ class MockXDRState:
             active=True,
             provider_job_id=provider_job_id,
             source_record_id=source_record_id,
+            command_payload_hash=command_payload_hash,
         )
         self.disposition_by_id[command.disposition_id] = attempt
         self.disposition_by_idem_hash[idem_hash] = command.disposition_id
         if command.intent_kind is DispositionIntentKind.EVENT_STATUS_UPDATE and attempt.active:
             self.active_terminal_heads[(object_id, command.closure_cycle)] = command.disposition_id
         return receipt
+
+    def _apply_confirmed_source_disposition(self, command: DispositionCommand) -> None:
+        """Move the source object's disposition to provider truth on confirm only.
+
+        No-op unless this is an EVENT_STATUS_UPDATE carrying a target disposition.
+        If the local edge table forbids the transition (e.g. already terminal), the
+        provider-confirmed writeback still stands; we simply do not re-apply.
+        """
+        if command.intent_kind is not DispositionIntentKind.EVENT_STATUS_UPDATE:
+            return
+        target_disp = getattr(command.operation_params, "target_disposition", None)
+        if target_disp is None:
+            return
+        locator = command.source_locator
+        kind_value = locator.source_kind.value
+        if kind_value not in ("incident", "alert", "asset", "log"):
+            return
+        kind: ObjectKindName = kind_value  # type: ignore[assignment]
+        object_id = locator.source_object_id
+        stored = self.objects.get((kind, object_id))
+        if stored is None or stored.deleted:
+            return
+        ref = stored.body.get("reference") or {}
+        current_raw = ref.get("source_disposition", SourceDisposition.UNKNOWN.value)
+        if SourceDisposition(current_raw) == target_disp:
+            return
+        try:
+            self.transition_source_disposition(
+                kind,
+                object_id,
+                target_disp,
+                allow_unknown_recovery=True,
+            )
+        except MockValidationError:
+            # Provider confirmed the action; local model just can't re-apply the edge.
+            return
 
     def confirm_via_readback(self, disposition_id: str) -> DispositionReceipt:
         """Authoritative readback confirmation (Mock P0 evidence=readback_verified)."""
@@ -749,6 +783,7 @@ class MockXDRState:
                 f"cannot confirm from status {latest.status.value}",
                 error_code="invalid_state_transition",
             )
+        self._apply_confirmed_source_disposition(attempt.command)
         seq = latest.sequence + 1
         receipt = latest.model_copy(
             update={

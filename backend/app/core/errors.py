@@ -116,6 +116,7 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCategory] = {
     "invalid_cursor": ErrorCategory.USER_INPUT,
     "unauthorized_field": ErrorCategory.USER_INPUT,
     "mock_validation_error": ErrorCategory.USER_INPUT,
+    "idempotency_key_reuse": ErrorCategory.USER_INPUT,
 }
 
 

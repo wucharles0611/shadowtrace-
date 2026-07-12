@@ -25,10 +25,6 @@ ObjectKind = Literal["incident", "alert", "asset", "log"]
 GLOBAL_STATE = MockXDRState()
 
 
-def get_state() -> MockXDRState:
-    return GLOBAL_STATE
-
-
 def create_app(*, state: MockXDRState | None = None) -> FastAPI:
     """Build a standalone Mock XDR FastAPI application."""
     app = FastAPI(title="ShadowTrace MockXDRServer", version="0.1.0")
@@ -39,20 +35,17 @@ def create_app(*, state: MockXDRState | None = None) -> FastAPI:
 
     def _require_read(
         authorization: str | None = Header(default=None),
-        x_mock_client: str | None = Header(default=None, alias="X-Mock-Client"),
     ) -> None:
+        # Auth is token-only. Read is weaker, so the write token also grants read;
+        # any missing/unknown token is rejected (no header-based bypass).
         token = _bearer(authorization)
-        if token != runtime.read_token and x_mock_client != "read":
-            # Allow write token for read as well (read is weaker); reject unknown.
-            if token != runtime.write_token:
-                raise HTTPException(status_code=401, detail={"error_code": "unauthorized"})
+        if token not in (runtime.read_token, runtime.write_token):
+            raise HTTPException(status_code=401, detail={"error_code": "unauthorized"})
 
     def _require_write(
         authorization: str | None = Header(default=None),
-        x_mock_client: str | None = Header(default=None, alias="X-Mock-Client"),
     ) -> None:
-        token = _bearer(authorization)
-        if token != runtime.write_token and x_mock_client != "write":
+        if _bearer(authorization) != runtime.write_token:
             raise HTTPException(status_code=401, detail={"error_code": "unauthorized"})
 
     @app.exception_handler(MockValidationError)
@@ -250,8 +243,7 @@ def create_app(*, state: MockXDRState | None = None) -> FastAPI:
         scenario: dict[str, Any],
         st: MockXDRState = Depends(_state),
     ) -> dict[str, Any]:
-        if not st.failure_profile.control_plane_enabled and st.scenario is not None:
-            raise HTTPException(status_code=403, detail={"error_code": "forbidden"})
+        _require_control(st)
         loaded = MockXDRScenario.model_validate(scenario)
         st.load_scenario(loaded)
         return {

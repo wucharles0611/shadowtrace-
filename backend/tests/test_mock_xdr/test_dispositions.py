@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import pytest
+
 from app.mock_xdr.models import MockFailureProfile
-from app.mock_xdr.state import MockXDRState, idempotency_key_hash
+from app.mock_xdr.state import MockValidationError, MockXDRState, idempotency_key_hash
 from app.models.enums import (
     ConfirmationEvidence,
     DispositionIntentKind,
     ExecutionJobStatus,
+    SourceDisposition,
     WritebackStatus,
 )
 from tests.test_mock_xdr.conftest import disposition_command
@@ -86,6 +89,36 @@ def test_idempotency_lookup_after_lost_response(state: MockXDRState, client) -> 
     second = state.submit_disposition(cmd)
     assert second.writeback_id == first.writeback_id
     assert second.sequence == first.sequence
+
+
+def test_idempotency_reuse_with_different_payload_rejected(state: MockXDRState) -> None:
+    token = state.objects[("incident", "INC-1")].concurrency_token
+    first = disposition_command(token=token, idempotency_key="idem-dup", disposition_id="disp-x")
+    state.submit_disposition(first)
+    # Same idempotency key + a different command payload is a caller bug → reject.
+    token2 = state.objects[("incident", "INC-1")].concurrency_token
+    second = disposition_command(
+        token=token2,
+        idempotency_key="idem-dup",
+        disposition_id="disp-y",
+        target=SourceDisposition.COMPLETED,
+    )
+    with pytest.raises(MockValidationError, match="idempotency key reused"):
+        state.submit_disposition(second)
+
+
+def test_source_disposition_unchanged_until_confirm(state: MockXDRState) -> None:
+    token = state.objects[("incident", "INC-1")].concurrency_token
+    cmd = disposition_command(token=token, target=SourceDisposition.CONTAINED)
+    receipt = state.submit_disposition(cmd)
+    assert receipt.status is WritebackStatus.ACCEPTED
+    # Accept alone must NOT mutate the source object's disposition.
+    rb = state.readback_source_disposition("incident", "INC-1")
+    assert rb["source_disposition"] == SourceDisposition.PENDING.value
+    # Only the authoritative readback confirm applies provider truth.
+    state.confirm_via_readback(cmd.disposition_id)
+    rb2 = state.readback_source_disposition("incident", "INC-1")
+    assert rb2["source_disposition"] == SourceDisposition.CONTAINED.value
 
 
 def test_unauthorized_analysis_fields_rejected(state: MockXDRState, client) -> None:
