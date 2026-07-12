@@ -1,5 +1,24 @@
 # ShadowTrace AI Agent 工程实施简介
 
+## 快速开始（ISSUE-001）
+
+```bash
+# 拉起 PostgreSQL(pgvector) + Redis + backend + frontend
+make up
+# 或：docker compose -f infra/docker-compose.yml up -d --build
+
+curl http://localhost:8000/api/v1/health
+
+# 后端单测 / 静态检查
+make test
+make lint
+
+# 前端本地开发（占位页显示 ShadowTrace）
+cd frontend && pnpm install && pnpm dev
+```
+
+默认配置见 `.env.example`（`SOURCE_MODE=mock_xdr`、`DISPOSITION_MODE=mock_xdr`、`SIMULATION_ENABLED=true`；`ALLOW_LIVE_SIDE_EFFECTS` / `ALLOW_XDR_WRITEBACK` 默认 false）。本阶段无真实 XDR，走 Mock 契约。
+
 ## 一、项目定位
 
 ShadowTrace 是一个独立部署的通用多 Agent 安全运营智能体系统。系统接收来自 Mock XDR、文件数据集或真实 XDR 数据传送适配器的安全事件、告警、资产与原始日志，由多个职责单一的 Agent 协作完成分诊、证据采集、攻击分析、风险评分、处置建议、处置验证和报告输出的完整闭环。

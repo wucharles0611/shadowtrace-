@@ -1,0 +1,73 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: shadowtrace-postgres
+    environment:
+      POSTGRES_USER: shadowtrace
+      POSTGRES_PASSWORD: shadowtrace
+      POSTGRES_DB: shadowtrace
+    ports:
+      - "5432:5432"
+    volumes:
+      - shadowtrace_pgdata:/var/lib/postgresql/data
+      - ./postgres/init-vector.sql:/docker-entrypoint-initdb.d/01-vector.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U shadowtrace -d shadowtrace"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7
+    container_name: shadowtrace-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    container_name: shadowtrace-backend
+    env_file:
+      - ../.env.example
+    environment:
+      DATABASE_URL: postgresql+asyncpg://shadowtrace:shadowtrace@postgres:5432/shadowtrace
+      REDIS_URL: redis://redis:6379/0
+      SOURCE_MODE: mock_xdr
+      DISPOSITION_MODE: mock_xdr
+      TOOL_MODE: mock
+      LLM_MODE: mock
+      SIMULATION_ENABLED: "true"
+      ALLOW_LIVE_SIDE_EFFECTS: "false"
+      ALLOW_XDR_WRITEBACK: "false"
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+    container_name: shadowtrace-frontend
+    ports:
+      - "5173:80"
+    depends_on:
+      - backend
+
+volumes:
+  shadowtrace_pgdata:

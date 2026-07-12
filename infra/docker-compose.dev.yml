@@ -1,0 +1,16 @@
+# Dev overrides: hot-reload backend; optional Vite container via profile.
+services:
+  backend:
+    volumes:
+      - ../backend/app:/app/app
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+
+  frontend:
+    profiles: ["frontend-dev"]
+    image: node:20
+    working_dir: /app
+    volumes:
+      - ../frontend:/app
+    command: ["sh", "-c", "corepack enable && corepack prepare pnpm@9.15.9 --activate && pnpm install --frozen-lockfile && pnpm dev --host 0.0.0.0"]
+    ports:
+      - "5173:5173"
