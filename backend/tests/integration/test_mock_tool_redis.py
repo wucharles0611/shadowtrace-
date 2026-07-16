@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -23,6 +23,7 @@ from app.tools.verify._common import MockVerificationRuntime
 pytestmark = pytest.mark.integration
 
 TARGET = "203.0.113.242"
+DELAYED_TARGET = "203.0.113.244"
 
 
 def _context(suffix: str) -> ToolExecutionContext:
@@ -33,10 +34,10 @@ def _context(suffix: str) -> ToolExecutionContext:
     )
 
 
-def _target(**parameters: Any) -> dict[str, Any]:
+def _target(target: str = TARGET, **parameters: Any) -> dict[str, Any]:
     return {
         "target_type": "ip",
-        "target": TARGET,
+        "target": target,
         "parameters": parameters,
     }
 
@@ -116,3 +117,64 @@ async def test_real_redis_response_verify_rollback_chain(
     sourced_observation = await state.get_observation("ip_blocks", "203.0.113.243")
     assert sourced_observation is not None
     assert sourced_observation.source_refs == [source_ref]
+
+
+@pytest.mark.asyncio
+async def test_real_redis_delayed_projection_transitions_from_pending_to_visible(
+    redis_client: RedisClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current_now = datetime(2026, 7, 14, 12, tzinfo=UTC)
+    monkeypatch.setattr("app.tools.mock_state._utc_now", lambda: current_now)
+    monkeypatch.setattr("app.providers.tools.mock_provider._utc_now", lambda: current_now)
+    state = MockEnvironmentState(redis_client)
+    provider = MockToolProvider(
+        state,
+        config=MockToolProviderConfig(observation_delay_ms=60_000),
+    )
+    verifier = MockVerificationRuntime(state, wait_timeout_ms=0, poll_interval_ms=1)
+
+    queued = ActionExecutionJob.model_validate(
+        await provider.execute(
+            "block_ip",
+            _target(DELAYED_TARGET),
+            context=_context("delayed"),
+        )
+    )
+    completed = await provider.run_job(queued.job_id)
+    pending = await state.get_observation(
+        "ip_blocks",
+        DELAYED_TARGET,
+        include_pending=True,
+        job_id=completed.job_id,
+    )
+    assert completed.status.value == "success"
+    assert pending is not None
+    assert (
+        await state.get_observation(
+            "ip_blocks",
+            DELAYED_TARGET,
+            job_id=completed.job_id,
+        )
+        is None
+    )
+
+    timed_out = ToolResult.model_validate(
+        await verifier.execute(
+            "check_ip_block_status",
+            _target(DELAYED_TARGET, job_id=completed.job_id),
+        )
+    )
+    assert timed_out.status.value == "timeout"
+    assert timed_out.data["is_verified"] is False
+    assert timed_out.data["detail"] == "observation_not_visible"
+
+    current_now = pending.available_at + timedelta(microseconds=1)
+    visible = ToolResult.model_validate(
+        await verifier.execute(
+            "check_ip_block_status",
+            _target(DELAYED_TARGET, job_id=completed.job_id),
+        )
+    )
+    assert visible.status.value == "success"
+    assert visible.data["is_verified"] is True

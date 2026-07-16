@@ -1,9 +1,30 @@
-.PHONY: up down test lint fmt migrate migrate-down integration-test ci-lint ci-test ci-build
+# Prefer the project venv when present.  Keep this resolver before every target
+# so all Python tooling is run from the same interpreter via ``python -m``.
+PYTHON ?= $(shell if [ -x "$(CURDIR)/backend/.venv/bin/python" ]; then echo "$(CURDIR)/backend/.venv/bin/python"; else echo python3; fi)
 
-COMPOSE := docker compose -f infra/docker-compose.yml
+WORKTREE_ID ?= $(shell printf '%s' "$(CURDIR)" | cksum | cut -d ' ' -f 1)
+COMPOSE_PROJECT_NAME ?= shadowtrace-$(WORKTREE_ID)
+POSTGRES_PORT ?= 5432
+REDIS_PORT ?= 6379
+BACKEND_PORT ?= 8000
+FRONTEND_PORT ?= 5173
+
+COMPOSE_FILE := $(CURDIR)/infra/docker-compose.yml
+COMPOSE := COMPOSE_PROJECT_NAME="$(COMPOSE_PROJECT_NAME)" \
+	POSTGRES_PORT="$(POSTGRES_PORT)" REDIS_PORT="$(REDIS_PORT)" \
+	BACKEND_PORT="$(BACKEND_PORT)" FRONTEND_PORT="$(FRONTEND_PORT)" \
+	docker compose --project-name "$(COMPOSE_PROJECT_NAME)" \
+	-f "$(COMPOSE_FILE)"
+
+INTEGRATION_PROJECT_NAME ?= $(COMPOSE_PROJECT_NAME)-integration
+CI_TEST_PROJECT_NAME ?= $(COMPOSE_PROJECT_NAME)-ci-test
+CI_BUILD_PROJECT_PREFIX ?= $(COMPOSE_PROJECT_NAME)-ci-build
+
 # Host-side URLs for tests that talk to Compose postgres/redis from the workstation / CI runner.
-CI_DATABASE_URL ?= postgresql+asyncpg://shadowtrace:shadowtrace@localhost:5432/shadowtrace
-CI_REDIS_URL ?= redis://localhost:6379/0
+CI_DATABASE_URL ?= postgresql+asyncpg://shadowtrace:shadowtrace@localhost:$(POSTGRES_PORT)/shadowtrace
+CI_REDIS_URL ?= redis://localhost:$(REDIS_PORT)/0
+
+.PHONY: up down test lint fmt migrate migrate-down integration-test ci-lint ci-test ci-build
 
 up:
 	$(COMPOSE) up -d --build
@@ -14,13 +35,13 @@ down:
 # Apply / roll back the database schema. Override DATABASE_URL to target a host
 # (e.g. DATABASE_URL=postgresql+asyncpg://shadowtrace:shadowtrace@localhost:5432/shadowtrace).
 migrate:
-	cd backend && alembic upgrade head
+	cd backend && $(PYTHON) -m alembic upgrade head
 
 migrate-down:
-	cd backend && alembic downgrade base
+	cd backend && $(PYTHON) -m alembic downgrade base
 
 test:
-	cd backend && python -m pytest tests/test_infra/test_health.py -v
+	cd backend && $(PYTHON) -m pytest tests/test_infra/test_health.py -v
 
 lint:
 	cd backend && $(PYTHON) -m ruff check app tests && $(PYTHON) -m mypy app
@@ -30,29 +51,32 @@ fmt:
 
 # --- ISSUE-017 data-foundation integration quality gate ------------------ #
 integration-test:
-	$(COMPOSE) up -d postgres redis
-	@echo "Waiting for postgres + redis to become healthy..."
-	@ok=0; for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do \
-		if $(COMPOSE) exec -T postgres pg_isready -U shadowtrace -d shadowtrace >/dev/null 2>&1 \
-			&& $(COMPOSE) exec -T redis redis-cli ping 2>/dev/null | grep -q PONG; then \
-			ok=1; break; \
+	@set -eu; \
+	project="$(INTEGRATION_PROJECT_NAME)"; \
+	compose() { \
+		COMPOSE_PROJECT_NAME="$$project" \
+		POSTGRES_PORT="$(POSTGRES_PORT)" REDIS_PORT="$(REDIS_PORT)" \
+		BACKEND_PORT="$(BACKEND_PORT)" FRONTEND_PORT="$(FRONTEND_PORT)" \
+		docker compose --project-name "$$project" \
+			-f "$(COMPOSE_FILE)" "$$@"; \
+	}; \
+	cleanup() { \
+		status=$$?; \
+		trap - EXIT INT TERM; \
+		if [ "$$status" -ne 0 ]; then \
+			compose ps -a || true; \
+			compose logs --no-color postgres redis || true; \
 		fi; \
-		sleep 2; \
-	done; \
-	if [ "$$ok" != "1" ]; then \
-		echo "postgres/redis health check timed out"; \
-		$(COMPOSE) ps; \
-		$(COMPOSE) logs postgres redis || true; \
-		exit 1; \
-	fi
-	cd backend && DATABASE_URL="$(CI_DATABASE_URL)" REDIS_URL="$(CI_REDIS_URL)" \
+		compose down --volumes --remove-orphans || true; \
+		exit "$$status"; \
+	}; \
+	trap cleanup EXIT INT TERM; \
+	compose up -d --wait --wait-timeout 120 postgres redis; \
+	cd "$(CURDIR)/backend"; \
+	DATABASE_URL="$(CI_DATABASE_URL)" REDIS_URL="$(CI_REDIS_URL)" \
 		$(PYTHON) -m pytest tests/integration -m integration -v
 
 # --- ISSUE-009 local / CI parity gates ------------------------------------ #
-# Prefer the project venv when present so bare `make ci-*` matches CI's
-# freshly installed ``.[dev]`` extras (incl. pytest-cov) without relying on PATH.
-PYTHON ?= $(shell if [ -x "$(CURDIR)/backend/.venv/bin/python" ]; then echo "$(CURDIR)/backend/.venv/bin/python"; else echo python3; fi)
-
 ci-lint:
 	cd backend && $(PYTHON) -m pip install -e ".[dev]" -q
 	cd backend && $(PYTHON) -m ruff check app tests
@@ -65,37 +89,71 @@ ci-lint:
 
 ci-test:
 	cd backend && $(PYTHON) -m pip install -e ".[dev]" -q
-	$(COMPOSE) up -d postgres redis
-	@echo "Waiting for postgres + redis to become healthy..."
-	@ok=0; for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do \
-		if $(COMPOSE) exec -T postgres pg_isready -U shadowtrace -d shadowtrace >/dev/null 2>&1 \
-			&& $(COMPOSE) exec -T redis redis-cli ping 2>/dev/null | grep -q PONG; then \
-			ok=1; break; \
+	@set -eu; \
+	project="$(CI_TEST_PROJECT_NAME)"; \
+	compose() { \
+		COMPOSE_PROJECT_NAME="$$project" \
+		POSTGRES_PORT="$(POSTGRES_PORT)" REDIS_PORT="$(REDIS_PORT)" \
+		BACKEND_PORT="$(BACKEND_PORT)" FRONTEND_PORT="$(FRONTEND_PORT)" \
+		docker compose --project-name "$$project" \
+			-f "$(COMPOSE_FILE)" "$$@"; \
+	}; \
+	cleanup() { \
+		status=$$?; \
+		trap - EXIT INT TERM; \
+		if [ "$$status" -ne 0 ]; then \
+			compose ps -a || true; \
+			compose logs --no-color postgres redis || true; \
 		fi; \
-		sleep 2; \
-	done; \
-	if [ "$$ok" != "1" ]; then \
-		echo "postgres/redis health check timed out"; \
-		$(COMPOSE) ps; \
-		$(COMPOSE) logs postgres redis || true; \
-		exit 1; \
-	fi
-	cd backend && DATABASE_URL="$(CI_DATABASE_URL)" REDIS_URL="$(CI_REDIS_URL)" \
+		compose down --volumes --remove-orphans || true; \
+		exit "$$status"; \
+	}; \
+	trap cleanup EXIT INT TERM; \
+	compose up -d --wait --wait-timeout 120 postgres redis; \
+	cd "$(CURDIR)/backend"; \
+	DATABASE_URL="$(CI_DATABASE_URL)" REDIS_URL="$(CI_REDIS_URL)" \
 		$(PYTHON) -m pytest --cov=app --cov-report=term --cov-report=xml:coverage.xml
 
 ci-build:
 	cd frontend && (corepack enable && corepack prepare pnpm@9.15.9 --activate || true)
 	cd frontend && pnpm install --frozen-lockfile
 	cd frontend && pnpm build
-	$(COMPOSE) build
 	@set -e; \
-	cleanup() { $(COMPOSE) down || true; }; \
-	trap cleanup EXIT; \
-	$(COMPOSE) up -d; \
-	echo "Waiting for backend health..."; \
-	ok=0; for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do \
-		if curl -sf http://localhost:8000/api/v1/health >/dev/null; then ok=1; break; fi; \
-		sleep 2; \
+	project="$(CI_BUILD_PROJECT_PREFIX)-$$(date +%s)-$$$$"; \
+	compose() { \
+		COMPOSE_PROJECT_NAME="$$project" \
+		POSTGRES_PORT="$(POSTGRES_PORT)" REDIS_PORT="$(REDIS_PORT)" \
+		BACKEND_PORT="$(BACKEND_PORT)" FRONTEND_PORT="$(FRONTEND_PORT)" \
+		docker compose --project-name "$$project" \
+			-f "$(COMPOSE_FILE)" "$$@"; \
+	}; \
+	cleanup() { \
+		status=$$?; \
+		trap - EXIT INT TERM; \
+		if [ "$$status" -ne 0 ]; then \
+			compose ps -a || true; \
+			compose logs --no-color postgres redis backend frontend || true; \
+		fi; \
+		compose down --volumes --remove-orphans || true; \
+		exit "$$status"; \
+	}; \
+	trap cleanup EXIT INT TERM; \
+	compose build; \
+	compose up -d --wait --wait-timeout 180; \
+	for service in postgres redis backend frontend; do \
+		container_id=$$(compose ps -q "$$service"); \
+		if [ -z "$$container_id" ]; then \
+			echo "$$service container is missing"; \
+			exit 1; \
+		fi; \
+		health=$$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}' "$$container_id"); \
+		if [ "$$health" != "healthy" ]; then \
+			echo "$$service is not healthy: $$health"; \
+			exit 1; \
+		fi; \
 	done; \
-	if [ "$$ok" != "1" ]; then echo "backend health check timed out"; $(COMPOSE) logs; exit 1; fi; \
-	curl -sf http://localhost:8000/api/v1/health
+	compose ps; \
+	curl --fail --show-error --silent \
+		"http://127.0.0.1:$(BACKEND_PORT)/api/v1/health" >/dev/null; \
+	curl --fail --show-error --silent \
+		"http://127.0.0.1:$(FRONTEND_PORT)/health" >/dev/null

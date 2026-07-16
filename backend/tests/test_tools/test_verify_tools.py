@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -100,6 +101,33 @@ class _FakeRedisClient:
 
     def get_client(self) -> _FakeRedis:
         return self.client
+
+
+class _VerificationPollController:
+    def __init__(self) -> None:
+        self._sleeping = asyncio.Event()
+        self._resume = asyncio.Event()
+        self._delay: float | None = None
+
+    async def sleep(self, delay: float) -> None:
+        resume = self._resume
+        self._delay = delay
+        self._sleeping.set()
+        await resume.wait()
+
+    async def wait_until_sleeping(self) -> float:
+        await self._sleeping.wait()
+        assert self._delay is not None
+        return self._delay
+
+    def resume(self) -> None:
+        sleeping = self._sleeping
+        resume = self._resume
+        self._sleeping = asyncio.Event()
+        self._resume = asyncio.Event()
+        self._delay = None
+        sleeping.clear()
+        resume.set()
 
 
 @pytest.fixture
@@ -322,15 +350,26 @@ async def test_each_verification_tool_reads_independent_projection(
 @pytest.mark.asyncio
 async def test_verification_waits_for_job_and_delayed_projection(
     state: MockEnvironmentState,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    observed_at = datetime.now(UTC)
+    current_now = datetime(2026, 7, 14, 12, tzinfo=UTC)
+    monkeypatch.setattr("app.tools.mock_state._utc_now", lambda: current_now)
+    monkeypatch.setattr("app.providers.tools.mock_provider._utc_now", lambda: current_now)
+    polls = _VerificationPollController()
+    monkeypatch.setattr(
+        "app.tools.verify._common.asyncio",
+        SimpleNamespace(
+            get_running_loop=asyncio.get_running_loop,
+            sleep=polls.sleep,
+        ),
+    )
     await state.set_observation(
         MockObservationRecord(
             surface="ip_blocks",
             target="203.0.113.34",
             status="blocked",
-            observed_at=observed_at,
-            available_at=observed_at,
+            observed_at=current_now,
+            available_at=current_now,
             observed_version=1,
             action_id="act-stale-visible",
             job_id="job-stale-visible",
@@ -352,20 +391,32 @@ async def test_verification_waits_for_job_and_delayed_projection(
     )
     registry = ToolRegistry()
     registry.auto_discover()
-    runtime = MockVerificationRuntime(state, wait_timeout_ms=500, poll_interval_ms=5)
-
-    async def complete_later() -> None:
-        await asyncio.sleep(0.02)
-        await provider.run_job(queued.job_id)
-
-    completion = asyncio.create_task(complete_later())
-    result = await _run_verify(
-        registry,
-        runtime,
-        "check_ip_block_status",
-        _target("ip", "203.0.113.34", job_id=queued.job_id),
+    runtime = MockVerificationRuntime(state, wait_timeout_ms=60_000, poll_interval_ms=1)
+    verification = asyncio.create_task(
+        _run_verify(
+            registry,
+            runtime,
+            "check_ip_block_status",
+            _target("ip", "203.0.113.34", job_id=queued.job_id),
+        )
     )
-    await completion
+
+    assert await polls.wait_until_sleeping() == 0.001
+    completed = await provider.run_job(queued.job_id)
+    pending = await state.get_observation(
+        "ip_blocks",
+        "203.0.113.34",
+        include_pending=True,
+        job_id=queued.job_id,
+    )
+    assert completed.status is ExecutionJobStatus.SUCCESS
+    assert pending is not None
+
+    polls.resume()
+    assert await polls.wait_until_sleeping() == 0.001
+    current_now = pending.available_at + timedelta(microseconds=1)
+    polls.resume()
+    result = await verification
 
     assert result.status is ToolResultStatus.SUCCESS
     assert result.data["is_verified"] is True
@@ -405,6 +456,9 @@ async def test_pending_projection_timeout_is_not_reported_as_effect_failure(
     state: MockEnvironmentState,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    frozen_now = datetime(2026, 7, 14, 12, tzinfo=UTC)
+    monkeypatch.setattr("app.tools.mock_state._utc_now", lambda: frozen_now)
+    monkeypatch.setattr("app.providers.tools.mock_provider._utc_now", lambda: frozen_now)
     provider = MockToolProvider(
         state,
         config=MockToolProviderConfig(observation_delay_ms=60_000),
@@ -446,15 +500,50 @@ async def test_pending_projection_timeout_is_not_reported_as_effect_failure(
     assert timed_out.data["is_verified"] is False
     assert timed_out.data["detail"] == "observation_not_visible"
 
-    future_now = pending.available_at + timedelta(seconds=1)
-    monkeypatch.setattr("app.tools.mock_state._utc_now", lambda: future_now)
-    monkeypatch.setattr("app.providers.tools.mock_provider._utc_now", lambda: future_now)
 
+@pytest.mark.asyncio
+async def test_delayed_projection_becomes_visible_after_clock_advance(
+    state: MockEnvironmentState,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current_now = datetime(2026, 7, 14, 12, tzinfo=UTC)
+    monkeypatch.setattr("app.tools.mock_state._utc_now", lambda: current_now)
+    monkeypatch.setattr("app.providers.tools.mock_provider._utc_now", lambda: current_now)
+    provider = MockToolProvider(
+        state,
+        config=MockToolProviderConfig(observation_delay_ms=60_000),
+    )
+    completed = await _run_action(
+        provider,
+        "block_ip",
+        "ip",
+        "203.0.113.40",
+        _context("delayed-visible"),
+    )
+    registry = ToolRegistry()
+    registry.auto_discover()
+    pending = await state.get_observation(
+        "ip_blocks",
+        "203.0.113.40",
+        include_pending=True,
+        job_id=completed.job_id,
+    )
+    assert pending is not None
+    assert (
+        await state.get_observation(
+            "ip_blocks",
+            "203.0.113.40",
+            job_id=completed.job_id,
+        )
+        is None
+    )
+
+    current_now = pending.available_at + timedelta(microseconds=1)
     visible = await _run_verify(
         registry,
         MockVerificationRuntime(state),
         "check_ip_block_status",
-        _target("ip", "203.0.113.39", job_id=completed.job_id),
+        _target("ip", "203.0.113.40", job_id=completed.job_id),
     )
     assert visible.status is ToolResultStatus.SUCCESS
     assert visible.data["is_verified"] is True

@@ -1,13 +1,12 @@
 services:
   postgres:
     image: pgvector/pgvector:pg16
-    container_name: shadowtrace-postgres
     environment:
       POSTGRES_USER: shadowtrace
       POSTGRES_PASSWORD: shadowtrace
       POSTGRES_DB: shadowtrace
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - shadowtrace_pgdata:/var/lib/postgresql/data
       - ./postgres/init-vector.sql:/docker-entrypoint-initdb.d/01-vector.sql:ro
@@ -19,9 +18,8 @@ services:
 
   redis:
     image: redis:7
-    container_name: shadowtrace-redis
     ports:
-      - "6379:6379"
+      - "${REDIS_PORT:-6379}:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -32,7 +30,6 @@ services:
     build:
       context: ../backend
       dockerfile: Dockerfile
-    container_name: shadowtrace-backend
     env_file:
       - ../.env.example
     environment:
@@ -46,7 +43,7 @@ services:
       ALLOW_LIVE_SIDE_EFFECTS: "false"
       ALLOW_XDR_WRITEBACK: "false"
     ports:
-      - "8000:8000"
+      - "${BACKEND_PORT:-8000}:8000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -63,11 +60,17 @@ services:
     build:
       context: ../frontend
       dockerfile: Dockerfile
-    container_name: shadowtrace-frontend
     ports:
-      - "5173:80"
+      - "${FRONTEND_PORT:-5173}:80"
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
 
 volumes:
   shadowtrace_pgdata:

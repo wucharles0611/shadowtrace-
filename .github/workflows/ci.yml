@@ -26,16 +26,16 @@ jobs:
           cache-dependency-path: backend/pyproject.toml
 
       - name: Install backend (dev extras)
-        run: pip install -e ".[dev]"
+        run: python -m pip install -e ".[dev]"
 
       - name: Ruff check
-        run: ruff check app tests
+        run: python -m ruff check app tests
 
       - name: Ruff format check
-        run: ruff format --check app tests
+        run: python -m ruff format --check app tests
 
       - name: Mypy
-        run: mypy app
+        run: python -m mypy app
 
   backend-test:
     name: backend-test
@@ -80,12 +80,24 @@ jobs:
           cache-dependency-path: backend/pyproject.toml
 
       - name: Install backend (dev extras)
-        run: pip install -e ".[dev]"
+        run: python -m pip install -e ".[dev]"
 
       - name: Pytest with coverage
         run: >
-          pytest --cov=app --cov-report=term
+          python -m pytest --cov=app --cov-report=term
           --cov-report=xml:coverage.xml
+
+      - name: Repeat critical timing tests under coverage
+        run: |
+          for attempt in 1 2 3; do
+            echo "Timing test pass ${attempt}/3"
+            python -m pytest \
+              tests/test_tools/test_verify_tools.py::test_verification_waits_for_job_and_delayed_projection \
+              tests/test_tools/test_verify_tools.py::test_pending_projection_timeout_is_not_reported_as_effect_failure \
+              tests/test_tools/test_verify_tools.py::test_delayed_projection_becomes_visible_after_clock_advance \
+              --cov=app --cov-append --cov-report=term \
+              --cov-report=xml:coverage.xml
+          done
 
       - name: Upload coverage summary
         if: always()
@@ -142,26 +154,58 @@ jobs:
     name: docker-build
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      COMPOSE_PROJECT_NAME: shadowtrace-ci-${{ github.run_id }}-${{ github.run_attempt }}
+      POSTGRES_PORT: "5432"
+      REDIS_PORT: "6379"
+      BACKEND_PORT: "8000"
+      FRONTEND_PORT: "5173"
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build images
-        run: docker compose -f infra/docker-compose.yml build
-
-      - name: Start stack and health-check
+      - name: Build and validate stack
         run: |
           set -euo pipefail
-          cleanup() { docker compose -f infra/docker-compose.yml down || true; }
-          trap cleanup EXIT
-          docker compose -f infra/docker-compose.yml up -d
-          for i in $(seq 1 30); do
-            if curl -sf http://localhost:8000/api/v1/health >/dev/null; then
-              echo "backend healthy"
-              curl -sf http://localhost:8000/api/v1/health
-              exit 0
+          compose() {
+            docker compose \
+              --project-name "${COMPOSE_PROJECT_NAME}" \
+              -f "${GITHUB_WORKSPACE}/infra/docker-compose.yml" \
+              "$@"
+          }
+          cleanup() {
+            status=$?
+            trap - EXIT
+            if (( status != 0 )); then
+              compose ps -a || true
+              compose logs --no-color postgres redis backend frontend || true
             fi
-            sleep 2
+            compose down --volumes --remove-orphans || true
+            exit "${status}"
+          }
+          trap cleanup EXIT
+
+          compose build
+          compose up -d --wait --wait-timeout 180
+
+          for service in postgres redis backend frontend; do
+            container_id="$(compose ps -q "${service}")"
+            if [[ -z "${container_id}" ]]; then
+              echo "${service} container is missing"
+              exit 1
+            fi
+            health="$(
+              docker inspect \
+                --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}' \
+                "${container_id}"
+            )"
+            if [[ "${health}" != "healthy" ]]; then
+              echo "${service} is not healthy: ${health}"
+              exit 1
+            fi
           done
-          echo "backend health check timed out"
-          docker compose -f infra/docker-compose.yml logs
-          exit 1
+
+          compose ps
+          curl --fail --show-error --silent \
+            "http://127.0.0.1:${BACKEND_PORT}/api/v1/health" >/dev/null
+          curl --fail --show-error --silent \
+            "http://127.0.0.1:${FRONTEND_PORT}/health" >/dev/null
