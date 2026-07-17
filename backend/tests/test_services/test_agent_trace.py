@@ -94,7 +94,7 @@ class _NestedModel(BaseModel):
 class _SampleOutput(BaseModel):
     event_id: str
     summary: str = ""
-    evidence_list: list[str] = Field(default_factory=list)
+    evidence_list: list[dict[str, Any]] = Field(default_factory=list)
     confidence: float = 0.0
     nested: _NestedModel = Field(default_factory=_NestedModel)
     password: str = ""
@@ -136,7 +136,10 @@ def test_decision_basis_extracts_structured_summary() -> None:
     output = _SampleOutput(
         event_id="evt-20260717-a1b2c3d4",
         summary="critical data exfiltration detected",
-        evidence_list=["evd-aaaaaaaa", "evd-bbbbbbbb"],
+        evidence_list=[
+            {"evidence_id": "evd-aaaaaaaa"},
+            {"evidence_id": "evd-bbbbbbbb"},
+        ],
         confidence=0.95,
         nested=_NestedModel(
             reasoning="high confidence threat",
