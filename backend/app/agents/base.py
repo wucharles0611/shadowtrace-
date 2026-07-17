@@ -82,7 +82,7 @@ class BaseAgent(ABC, Generic[TIn, TOut]):
         self.post_hooks: list[Any] = []
 
     async def execute(self, input: TIn) -> TOut:
-        """Template method: budget → pre_hooks → progress → _run → guardrails → post_hooks → trace."""
+        """budget → pre_hooks → progress → _run → guardrails → post_hooks → trace."""
         expected_input = AGENT_INPUT_BY_NAME.get(cast(AgentName, self.agent_name))
         if expected_input is None or type(input) is not expected_input:
             expected_name = (

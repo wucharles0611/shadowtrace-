@@ -10,7 +10,7 @@ from __future__ import annotations
 import hashlib
 import uuid
 from collections.abc import Mapping
-from datetime import UTC, datetime
+from datetime import datetime
 from enum import Enum
 from typing import Any
 
@@ -147,7 +147,11 @@ def _collect_refs(data: dict[str, Any], keys: frozenset[str]) -> list[str]:
         if isinstance(value, list):
             for item in value:
                 if isinstance(item, Mapping):
-                    for id_key in ("evidence_id", "action_id", "case_id", "technique_id", "citation_id"):
+                    _ref_keys = (
+                        "evidence_id", "action_id", "case_id",
+                        "technique_id", "citation_id",
+                    )
+                    for id_key in _ref_keys:
                         if id_key in item:
                             refs.append(str(item[id_key]))
         elif isinstance(value, Mapping):
@@ -224,7 +228,9 @@ class TraceProjection:
         raw_model = _extract_scalar(data, _DECISION_MODEL_FIELDS)
         model_name = str(raw_model) if raw_model is not None else None
 
-        raw_action = _extract_scalar(data, frozenset({"selected_action", "actions", "response_plan"}))
+        raw_action = _extract_scalar(
+            data, frozenset({"selected_action", "actions", "response_plan"}),
+        )
         selected_action = str(raw_action)[:1000] if raw_action is not None else None
 
         confidence = None

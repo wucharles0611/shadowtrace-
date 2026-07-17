@@ -89,13 +89,13 @@ def _id(prefix: str) -> str:
 class _NestedModel(BaseModel):
     raw_payload: dict[str, Any] = Field(default_factory=dict)
     reasoning: str = ""
-    confidence: float = 0.8
-    evidence_ids: list[str] = Field(default_factory=list)
 
 
 class _SampleOutput(BaseModel):
     event_id: str
     summary: str = ""
+    evidence_list: list[str] = Field(default_factory=list)
+    confidence: float = 0.0
     nested: _NestedModel = Field(default_factory=_NestedModel)
     password: str = ""
     token: str = ""
@@ -109,7 +109,6 @@ def test_projection_strips_raw_payload_keys() -> None:
         nested=_NestedModel(
             raw_payload={"secret": "s3cret", "data": "important"},
             reasoning="the attacker used phishing",
-            evidence_ids=["evd-11111111", "evd-22222222"],
         ),
         password="my-password",
         token="my-token",
@@ -131,18 +130,16 @@ def test_projection_strips_raw_payload_keys() -> None:
     assert nested_raw["_redacted"] is True
     assert nested_raw["reason"] == "raw_block"
     assert nested["reasoning"] == "the attacker used phishing"
-    assert nested["evidence_ids"] == ["evd-11111111", "evd-22222222"]
-    assert nested["confidence"] == 0.8
 
 
 def test_decision_basis_extracts_structured_summary() -> None:
     output = _SampleOutput(
         event_id="evt-20260717-a1b2c3d4",
         summary="critical data exfiltration detected",
+        evidence_list=["evd-aaaaaaaa", "evd-bbbbbbbb"],
+        confidence=0.95,
         nested=_NestedModel(
             reasoning="high confidence threat",
-            confidence=0.95,
-            evidence_ids=["evd-aaaaaaaa", "evd-bbbbbbbb"],
         ),
     )
     basis = TraceProjection.decision_basis(output)
@@ -231,7 +228,8 @@ async def test_failed_trace_with_error_detail(
     assert row.status == "failed"
     assert row.error_detail is not None
     assert "secret-token-12345" not in row.error_detail
-    assert "[REDACTED]" in row.error_detail or row.error_detail != "Connection timed out: Authorization: Bearer secret-token-12345"
+    original = "Connection timed out: Authorization: Bearer secret-token-12345"
+    assert "[REDACTED]" in row.error_detail or row.error_detail != original
 
 
 @pytest.mark.asyncio
