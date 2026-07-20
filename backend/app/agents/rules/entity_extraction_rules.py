@@ -10,10 +10,8 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from app.core.network_utils import is_internal_ip
-
 if TYPE_CHECKING:
-    from app.models.entities import EntitySet
+    pass
 
 
 # --------------------------------------------------------------------------- #
@@ -24,6 +22,7 @@ if TYPE_CHECKING:
 _IP_PATTERN: re.Pattern[str] = re.compile(
     r"\b(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\b"
 )
+IP_PATTERN: re.Pattern[str] = _IP_PATTERN  # Public alias for reuse by triage_agent
 
 # FQDN / domain name (requires at least one dot-separated label + valid TLD).
 _DOMAIN_PATTERN: re.Pattern[str] = re.compile(
@@ -42,7 +41,8 @@ _HOSTNAME_PATTERN: re.Pattern[str] = re.compile(
     r"|"
     r"[A-Za-z]{2,}\d{1,4}"                             # PC-FIN-023 style
     r"|"
-    r"[A-Za-z][A-Za-z0-9_]*-(?:SRV|DC|DB|WEB|OPS|FIN|SQL|AD|FS|APP|JUMP|ADMIN)"  # known role suffixes
+    r"[A-Za-z][A-Za-z0-9_]*-(?:SRV|DC|DB|WEB|OPS|FIN|SQL|AD|FS|APP|JUMP|ADMIN)"
+    r"[A-Za-z0-9_-]*"  # known role suffixes
     r"[A-Za-z0-9_-]*"
     r")"
     r"\b"
@@ -141,4 +141,5 @@ def _unique(items: list[str]) -> list[str]:
 __all__ = [
     "EntityExtractionResult",
     "extract_entities_regex",
+    "IP_PATTERN",
 ]

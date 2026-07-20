@@ -12,6 +12,7 @@ identity (aliased to ``FalsePositiveMatcher`` by ``WRITER_ALIASES``).
 from __future__ import annotations
 
 import logging
+import re as _re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -19,10 +20,15 @@ from typing import Any
 from app.agents.base import BaseAgent
 from app.agents.prompts.triage_prompt import TriageLLMResponse, build_triage_messages
 from app.agents.rules.entity_extraction_rules import (
-    EntityExtractionResult,
+    IP_PATTERN,
     extract_entities_regex,
 )
-from app.core.errors import GuardrailViolationError, LLMError, ShadowTraceError
+from app.core.errors import (
+    DependencyUnavailableError,
+    GuardrailViolationError,
+    LLMError,
+    ShadowTraceError,
+)
 from app.core.llm.base import LLMResponse
 from app.core.network_utils import is_internal_ip
 from app.models.agent_io import TriageAgentInput, TriageResult
@@ -36,7 +42,7 @@ from app.models.entities import (
     ProcessEntity,
 )
 from app.models.enums import EventType, Severity
-from app.services.working_memory import BoundWorkingMemory, WorkingMemory
+from app.services.working_memory import BoundWorkingMemory
 
 logger = logging.getLogger(__name__)
 
@@ -51,9 +57,10 @@ SEVERITY_RULES: dict[str, list[tuple[str, str]]] = {
         ("event_type", "host_compromise"),
         ("event_type", "lateral_movement"),
     ],
+    # data_exfiltration + lateral_movement co-occurrence → critical (checked
+    # in _apply_severity_rules via alert_text keyword "lateral").
     "critical": [
         ("event_type", "data_exfiltration"),
-        # data_exfiltration co-occurring with lateral_movement → critical
     ],
     "low": [
         ("event_type", "account_anomaly"),
@@ -64,11 +71,7 @@ SEVERITY_RULES: dict[str, list[tuple[str, str]]] = {
 # IOC extraction helpers
 # --------------------------------------------------------------------------- #
 
-import re as _re
-
-_IOC_IP_PATTERN: _re.Pattern[str] = _re.compile(
-    r"\b(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\b"
-)
+# IP_PATTERN is imported from entity_extraction_rules to avoid duplication.
 _IOC_DOMAIN_PATTERN: _re.Pattern[str] = _re.compile(
     r"\b(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,63}\b"
 )
@@ -145,6 +148,7 @@ class RuleBasedFalsePositiveHook:
                 "scenario": scenario,
                 "source": "RuleBasedFalsePositiveHook",
                 "matched_at": datetime.now(UTC).isoformat(),
+                "recommendation": "close_as_fp",
             }
         elif signature in _FP_SIGNATURES:
             fp_match = {
@@ -152,6 +156,7 @@ class RuleBasedFalsePositiveHook:
                 "signature": signature,
                 "source": "RuleBasedFalsePositiveHook",
                 "matched_at": datetime.now(UTC).isoformat(),
+                "recommendation": "close_as_fp",
             }
 
         if fp_match is None:
@@ -169,7 +174,6 @@ class RuleBasedFalsePositiveHook:
 def _apply_severity_rules(
     event_type: EventType,
     alert_text: str = "",
-    entities: EntitySet | None = None,
 ) -> tuple[Severity, bool]:
     """Assign severity and need_investigation via SEVERITY_RULES.
 
@@ -216,7 +220,7 @@ def _extract_iocs(
     iocs: set[str] = set()
 
     # Extract from raw text.
-    for ip in _IOC_IP_PATTERN.findall(alert_text):
+    for ip in IP_PATTERN.findall(alert_text):
         if not is_internal_ip(ip):
             iocs.add(ip)
     for domain in _IOC_DOMAIN_PATTERN.findall(alert_text):
@@ -261,7 +265,7 @@ def _map_event_type(
         return EventType.MALICIOUS_PROCESS
     if "domain" in text or "dns" in text:
         return EventType.SUSPICIOUS_DOMAIN
-    if "lateral" in text or "move" in text or "pivot" in text:
+    if "lateral" in text or "pivot" in text:
         return EventType.LATERAL_MOVEMENT
     if "host" in text or "compromise" in text or "infected" in text:
         return EventType.HOST_COMPROMISE
@@ -336,11 +340,10 @@ class TriageAgent(BaseAgent[TriageAgentInput, TriageResult]):
         # Install the P0 RuleBasedFalsePositiveHook with its own writer identity.
         # The hook must write to EventContext.false_positive_match via the
         # "FalsePositiveMatcher" owner — using the TriageAgent's own BoundWorkingMemory
-        # would fail FIELD_OWNERSHIP validation. We access the backing WorkingMemory
-        # to mint a second capability token for the hook.
+        # would fail FIELD_OWNERSHIP validation. We mint a second capability token
+        # via BoundWorkingMemory.for_writer() (the public API).
         if working_memory is not None:
-            base_wm: WorkingMemory = working_memory._memory  # noqa: SLF001
-            fp_hook_memory = base_wm.for_writer("RuleBasedFalsePositiveHook")
+            fp_hook_memory = working_memory.for_writer("RuleBasedFalsePositiveHook")
             self.pre_triage_hooks.append(
                 RuleBasedFalsePositiveHook(working_memory=fp_hook_memory)
             )
@@ -375,7 +378,7 @@ class TriageAgent(BaseAgent[TriageAgentInput, TriageResult]):
 
         # 4. Severity + need_investigation.
         severity, need_investigation = _apply_severity_rules(
-            event_type, alert_text=input.raw_event_summary, entities=entities
+            event_type, alert_text=input.raw_event_summary
         )
 
         # 5. IOC extraction.
@@ -426,6 +429,7 @@ class TriageAgent(BaseAgent[TriageAgentInput, TriageResult]):
                 response_model=TriageLLMResponse,
                 temperature=0.3,
                 max_tokens=4096,
+                timeout=15.0,
             )
 
             if response.parsed is not None and isinstance(response.parsed, TriageLLMResponse):
@@ -533,13 +537,23 @@ class TriageAgent(BaseAgent[TriageAgentInput, TriageResult]):
                 input.event_id,
             )
             raise
-        except Exception:
-            # Transient I/O error (Redis, DB, serialization) — log and continue.
+        except (DependencyUnavailableError, ConnectionError, TimeoutError):
+            # Transient I/O failure (Redis, DB) — log and continue.
             logger.warning(
-                "Failed to write triage_result to EventContext for event=%s",
+                "Transient failure writing triage_result to EventContext for event=%s",
                 input.event_id,
                 exc_info=True,
             )
+        except ShadowTraceError as exc:
+            if exc.retryable:
+                logger.warning(
+                    "Retryable error writing triage_result for event=%s: %s",
+                    input.event_id,
+                    exc.error_code,
+                    exc_info=True,
+                )
+            else:
+                raise
 
     # ------------------------------------------------------------------ #
     # Helpers

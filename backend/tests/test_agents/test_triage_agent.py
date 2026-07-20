@@ -7,12 +7,14 @@ Mock interfaces MUST match the real BoundWorkingMemory signature:
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock
+
+import pydantic
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.agents.triage_agent import (
-    RuleBasedFalsePositiveHook,
     SEVERITY_RULES,
+    RuleBasedFalsePositiveHook,
     TriageAgent,
     _apply_severity_rules,
     _extract_iocs,
@@ -23,11 +25,9 @@ from app.core.errors import GuardrailViolationError, LLMError
 from app.models.agent_io import TriageAgentInput, TriageResult
 from app.models.entities import (
     AccountEntity,
-    DomainEntity,
     EntitySet,
     HostEntity,
     IPEntity,
-    ProcessEntity,
 )
 from app.models.enums import EventType, Severity
 from app.services.working_memory import FIELD_OWNERSHIP
@@ -53,7 +53,7 @@ class _MockBoundWorkingMemory:
         # ``working_memory._memory.for_writer(...)`` works in TriageAgent.__init__.
         self._memory = self
 
-    def for_writer(self, writer: str) -> "_MockBoundWorkingMemory":
+    def for_writer(self, writer: str) -> _MockBoundWorkingMemory:
         """Mint a new mock bound to *writer* (mirrors WorkingMemory.for_writer)."""
         from app.services.working_memory import normalize_writer
         return _MockBoundWorkingMemory(writer_name=normalize_writer(writer))
@@ -117,7 +117,7 @@ class _MockLLMClient:
 
     async def chat(self, messages, *, event_id, agent_name, prompt_key,
                    scenario_id=None, temperature=0.3, max_tokens=4096,
-                   json_mode=False, response_model=None):
+                   json_mode=False, response_model=None, timeout=None):
         self.chat_calls.append({
             "messages": messages,
             "event_id": event_id,
@@ -577,7 +577,7 @@ class TestSeverityRules:
 
     def test_severity_rules_are_tuples(self):
         """Each rule is a list of (key, value) tuples."""
-        for level, rules in SEVERITY_RULES.items():
+        for _level, rules in SEVERITY_RULES.items():
             assert isinstance(rules, list)
             for rule in rules:
                 assert isinstance(rule, tuple)
@@ -626,7 +626,7 @@ class TestTriageAgentContract:
 
     def test_triage_result_extra_forbid(self):
         """TriageResult rejects extra fields."""
-        with pytest.raises(Exception):
+        with pytest.raises(pydantic.ValidationError):
             TriageResult.model_validate({
                 "event_type": "other",
                 "severity": "low",
@@ -642,8 +642,8 @@ class TestTriageAgentContract:
 class TestGoldenResponse:
     def test_golden_response_parses_as_triage_llm_response(self):
         """The golden default.json must validate as TriageLLMResponse."""
-        from pathlib import Path
         import json
+
         from app.agents.prompts.triage_prompt import TriageLLMResponse
         from app.core.llm.base import default_golden_root
 

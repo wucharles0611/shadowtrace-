@@ -273,6 +273,7 @@ class BaseLLMClient(ABC):
         max_tokens: int = 4096,
         json_mode: bool = False,
         response_model: type[BaseModel] | None = None,
+        timeout: float | None = None,
     ) -> LLMResponse:
         del scenario_id  # Used by MockLLMClient; never inferred from prompt content.
         chat_started = time.perf_counter()
@@ -295,6 +296,7 @@ class BaseLLMClient(ABC):
                     max_tokens=max_tokens,
                     json_mode=require_json,
                     response_model=response_model,
+                    timeout=timeout,
                 )
             except LLMInvalidJSONError as exc:
                 last_error = exc
@@ -381,6 +383,7 @@ class BaseLLMClient(ABC):
         max_tokens: int,
         json_mode: bool,
         response_model: type[BaseModel] | None,
+        timeout: float | None = None,
     ) -> tuple[ProviderResponse, BaseModel | None]:
         self._check_convergence(event_id, agent_name, prompt_key, model_name)
         started = time.perf_counter()
@@ -390,7 +393,8 @@ class BaseLLMClient(ABC):
         try:
             await self._check_budget(event_id=event_id, agent_name=agent_name)
             try:
-                async with asyncio.timeout(self.timeout_seconds):
+                effective_timeout = timeout if timeout is not None else self.timeout_seconds
+                async with asyncio.timeout(effective_timeout):
                     raw = await self._request(
                         messages,
                         model_name=model_name,

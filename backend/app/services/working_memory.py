@@ -124,6 +124,12 @@ class BoundWorkingMemory:
     async def read_scratchpad(self, event_id: str) -> list[ScratchpadEntry]:
         return await self._memory.read_scratchpad(event_id, reader=self._capability)
 
+    def for_writer(self, writer: str) -> BoundWorkingMemory:
+        """Mint a new ``BoundWorkingMemory`` for *writer* from the same backing
+        ``WorkingMemory``, preserving the single-instance invariants.
+        """
+        return self._memory.for_writer(writer)
+
 
 class WorkingMemory:
     """Owner-gated EventContext access with scratchpad + access audit."""

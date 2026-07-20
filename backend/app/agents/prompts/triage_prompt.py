@@ -41,51 +41,81 @@ Entity types to extract (only these six categories):
 - host: A machine hostname (e.g. "PC-FIN-023", "web-server-01").
 - ip: An IPv4 address with scope hint ("external" or "internal").
 - domain: A fully-qualified domain name (e.g. "unknown-upload-example.com").
-- process: A process binary name with optional command line (e.g. "powershell.exe", "7z.exe a -p archive.7z").
+- process: A process binary name with optional command line
+  (e.g. "powershell.exe", "7z.exe a -p archive.7z").
 - file: A file name with extension (e.g. "finance_report.zip", "data.csv").
 """
 
 FEW_SHOT_EXAMPLE_1 = """
-Alert: "Account zhangsan on host PC-FIN-023 executed powershell.exe which compressed finance_report.zip via 7z.exe and uploaded to 203.0.113.88 (unknown-upload-example.com). Source IP 45.153.12.88 triggered geographic anomaly."
+Alert: "Account zhangsan on host PC-FIN-023 executed powershell.exe which compressed \
+finance_report.zip via 7z.exe and uploaded to 203.0.113.88 \
+(unknown-upload-example.com). Source IP 45.153.12.88 triggered geographic anomaly."
 
 Expected output:
 {
   "event_type": "data_exfiltration",
   "entities": {
-    "accounts": [{"entity_type": "account", "username": "zhangsan", "entity_id": "acct-zhangsan"}],
-    "hosts": [{"entity_type": "host", "hostname": "PC-FIN-023", "entity_id": "host-pcfin023"}],
+    "accounts": [
+      {"entity_type": "account", "username": "zhangsan",
+       "entity_id": "acct-zhangsan"}
+    ],
+    "hosts": [
+      {"entity_type": "host", "hostname": "PC-FIN-023",
+       "entity_id": "host-pcfin023"}
+    ],
     "ips": [
-      {"entity_type": "ip", "address": "203.0.113.88", "scope": "external", "entity_id": "ip-20300113088"},
-      {"entity_type": "ip", "address": "45.153.12.88", "scope": "external", "entity_id": "ip-4515301288"}
+      {"entity_type": "ip", "address": "203.0.113.88",
+       "scope": "external", "entity_id": "ip-20300113088"},
+      {"entity_type": "ip", "address": "45.153.12.88",
+       "scope": "external", "entity_id": "ip-4515301288"}
     ],
-    "domains": [{"entity_type": "domain", "fqdn": "unknown-upload-example.com", "entity_id": "dom-unknownupload"}],
+    "domains": [
+      {"entity_type": "domain", "fqdn": "unknown-upload-example.com",
+       "entity_id": "dom-unknownupload"}
+    ],
     "processes": [
-      {"entity_type": "process", "name": "powershell.exe", "entity_id": "proc-powershell"},
-      {"entity_type": "process", "name": "7z.exe", "entity_id": "proc-7z"}
+      {"entity_type": "process", "name": "powershell.exe",
+       "entity_id": "proc-powershell"},
+      {"entity_type": "process", "name": "7z.exe",
+       "entity_id": "proc-7z"}
     ],
-    "files": [{"entity_type": "file", "name": "finance_report.zip", "entity_id": "file-financereport"}]
+    "files": [
+      {"entity_type": "file", "name": "finance_report.zip",
+       "entity_id": "file-financereport"}
+    ]
   },
-  "reasoning": "Insider data exfiltration pattern: account compressed sensitive file and uploaded to external IP and domain."
+  "reasoning": "Insider data exfiltration pattern: account compressed \
+sensitive file and uploaded to external IP and domain."
 }
-"""
+"""  # noqa: E501
 
 FEW_SHOT_EXAMPLE_2 = """
-Alert: "User svc-backup failed to login 1 time from 10.50.1.10 to host PC-OPS-JUMP-01."
+Alert: "User svc-backup failed to login 1 time from 10.50.1.10 \
+to host PC-OPS-JUMP-01."
 
 Expected output:
 {
   "event_type": "account_anomaly",
   "entities": {
-    "accounts": [{"entity_type": "account", "username": "svc-backup", "entity_id": "acct-svcbackup"}],
-    "hosts": [{"entity_type": "host", "hostname": "PC-OPS-JUMP-01", "entity_id": "host-pcopsjump01"}],
-    "ips": [{"entity_type": "ip", "address": "10.50.1.10", "scope": "internal", "entity_id": "ip-10500110"}],
+    "accounts": [
+      {"entity_type": "account", "username": "svc-backup",
+       "entity_id": "acct-svcbackup"}
+    ],
+    "hosts": [
+      {"entity_type": "host", "hostname": "PC-OPS-JUMP-01",
+       "entity_id": "host-pcopsjump01"}
+    ],
+    "ips": [
+      {"entity_type": "ip", "address": "10.50.1.10",
+       "scope": "internal", "entity_id": "ip-10500110"}
+    ],
     "domains": [],
     "processes": [],
     "files": []
   },
   "reasoning": "Single failed login from internal IP; likely not a threat."
 }
-"""
+"""  # noqa: E501
 
 TRIAGE_SYSTEM_PROMPT: str = (
     f"You are a security triage specialist. Your job is to parse a security alert "
