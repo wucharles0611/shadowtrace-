@@ -22,10 +22,9 @@ _BACKEND = Path(__file__).resolve().parents[1]
 if str(_BACKEND) not in sys.path:
     sys.path.insert(0, str(_BACKEND))
 
+from app.core.config import Settings  # noqa: E402
 from app.core.embedding.service import EmbeddingService  # noqa: E402
 from app.services.knowledge_store import KnowledgeStore  # noqa: E402
-
-from app.core.config import Settings  # noqa: E402
 from app.services.playbook_kb_service import PlaybookKBService  # noqa: E402
 
 REPO_ROOT = _BACKEND.parent

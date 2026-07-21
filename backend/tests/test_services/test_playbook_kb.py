@@ -211,6 +211,44 @@ class TestValidationRejection:
             Path(tmp_path).unlink(missing_ok=True)
 
     @pytest.mark.asyncio
+    async def test_other_playbook_with_l2_step_rejected(
+        self,
+        service: PlaybookKBService,
+    ) -> None:
+        invalid_json = {
+            "playbooks": [
+                {
+                    "playbook_id": "pb-deadc0de",
+                    "playbook_name": "Aggressive Other Playbook",
+                    "event_type": "other",
+                    "min_severity": "low",
+                    "description": "other playbooks must stay conservative",
+                    "steps": [
+                        {
+                            "step_order": 1,
+                            "action_name": "Block IP",
+                            "tool_name": "block_ip",
+                            "action_level": "l2",
+                            "precondition": "",
+                            "expected_outcome": "",
+                            "required_capabilities": ["entity_response"],
+                        }
+                    ],
+                }
+            ]
+        }
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".json", delete=False, encoding="utf-8"
+        ) as f:
+            f.write(json.dumps(invalid_json, ensure_ascii=False, indent=2))
+            tmp_path = f.name
+        try:
+            with pytest.raises(ValueError, match="event_type 'other' only allows l0/l1"):
+                await service.load_from_file(tmp_path)
+        finally:
+            Path(tmp_path).unlink(missing_ok=True)
+
+    @pytest.mark.asyncio
     async def test_wrong_action_level_rejected(
         self,
         service: PlaybookKBService,
@@ -269,17 +307,17 @@ class TestSearchPlaybooks:
             assert pb.event_type.value == "account_anomaly"
 
     @pytest.mark.asyncio
-    async def test_min_severity_filter_excludes_lower_playbooks(
+    async def test_min_severity_filter_excludes_higher_threshold_playbooks(
         self,
         service: PlaybookKBService,
         session_factory: async_sessionmaker[AsyncSession],
     ) -> None:
         await _clean(session_factory)
         await service.load_from_file(DATA_FILE)
-        results = await service.search_playbooks("data_exfiltration", "critical", top_k=10)
-        for pb in results:
-            sev_map = {"low": 0, "medium": 1, "high": 2, "critical": 3}
-            assert sev_map[pb.min_severity.value] <= 3  # all valid since critical=3 is max
+        results = await service.search_playbooks("data_exfiltration", "medium", top_k=10)
+        playbook_ids = {pb.playbook_id for pb in results}
+        assert "pb-9e0f1a2b" in playbook_ids
+        assert "pb-5a6b7c8d" not in playbook_ids
 
     @pytest.mark.asyncio
     async def test_data_exfiltration_high_returns_disable_account(
@@ -310,6 +348,8 @@ class TestSearchPlaybooks:
             "data_exfiltration", "critical", query_text="data theft file access", top_k=3
         )
         assert len(results) >= 1
+        for pb in results:
+            assert pb.event_type.value == "data_exfiltration"
 
     @pytest.mark.asyncio
     async def test_respects_top_k(
