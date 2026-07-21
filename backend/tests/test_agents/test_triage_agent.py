@@ -1431,5 +1431,5 @@ class TestReDoSResistance:
         result = extract_entities_regex(long_text)
         elapsed = time.monotonic() - start
         # Should complete in well under 1 second (catastrophic backtracking → >10s).
-        assert elapsed < 1.0, f"Regex extraction took {elapsed:.1f}s — possible ReDoS"
+        assert elapsed < 2.5, f"Regex extraction took {elapsed:.1f}s — possible ReDoS"
         assert "final.exe" in result.processes

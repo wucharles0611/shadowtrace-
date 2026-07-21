@@ -141,7 +141,9 @@ class SQLAlchemyLLMCallAuditRecorder:
 
 @runtime_checkable
 class ConvergenceGuardHook(Protocol):
-    def record_step(self, event_id: str, step_type: str, signature: str) -> None: ...
+    async def record_step(
+        self, event_id: str, step_type: str, *, signature: str | None = None
+    ) -> None: ...
 
     def should_stop(self, event_id: str) -> Any: ...
 
@@ -530,11 +532,7 @@ class BaseLLMClient(ABC):
         if guard is None:
             return
         signature = f"{agent_name}:{prompt_key}:{model_name}"
-        record_step = guard.record_step
-        if _is_async_callable(record_step):
-            await guard.record_step(event_id, "llm_call", signature=signature)
-        else:
-            guard.record_step(event_id, "llm_call", signature=signature)
+        await guard.record_step(event_id, "llm_call", signature=signature)
 
         should_stop = guard.should_stop
         if _is_async_callable(should_stop):

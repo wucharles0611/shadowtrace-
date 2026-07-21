@@ -125,7 +125,7 @@ class RuleBasedFalsePositiveHook:
         """
         self._wm = working_memory
 
-    async def __call__(self, agent: BaseAgent, input: TriageAgentInput) -> None:  # type: ignore[override]
+    async def __call__(self, agent: BaseAgent[TriageAgentInput, TriageResult], input: TriageAgentInput) -> None:
         wm = self._wm
         if wm is None:
             return
@@ -378,8 +378,8 @@ def _merge_hint_entities(
     # Traverse all entity categories defined on EntitySet so new categories
     # are picked up automatically (instead of a hardcoded six-item tuple).
     for category in EntitySet.model_fields.keys():
-        llm_list: list = getattr(llm_entities, category)
-        hint_list: list = getattr(hint_entities, category)
+        llm_list: list[Any] = getattr(llm_entities, category)
+        hint_list: list[Any] = getattr(hint_entities, category)
         existing_ids = {e.entity_id for e in llm_list}
         combined = list(llm_list) + [e for e in hint_list if e.entity_id not in existing_ids]
         setattr(merged, category, combined)

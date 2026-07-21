@@ -40,8 +40,9 @@ class MockLLMClient(BaseLLMClient):
         max_tokens: int = 4096,
         json_mode: bool = False,
         response_model: type[BaseModel] | None = None,
+        timeout: float | None = None,
     ) -> LLMResponse:
-        del temperature, max_tokens
+        del temperature, max_tokens, timeout
         self._validate_context(event_id, agent_name, prompt_key, messages)
         await self._check_convergence(event_id, agent_name, prompt_key, self.primary_model)
         started = time.perf_counter()
