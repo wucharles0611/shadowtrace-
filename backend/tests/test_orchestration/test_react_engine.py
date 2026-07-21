@@ -406,7 +406,9 @@ async def test_convergence_guard_duplicate_tool_calls_forces_stop(
     assert result.stop_reason is ReActStopReason.CONVERGED
     assert result.outputs["convergence_reason"] == StopReason.DUPLICATE_TOOL_CALLS.value
     signatures = result.outputs["convergence_state"]["tool_call_signatures"]
-    assert any(name.startswith("query_threat_intel") and count > 3 for name, count in signatures.items())
+    assert any(
+        name.startswith("query_threat_intel") and count > 3 for name, count in signatures.items()
+    )
     assert len(result.rounds) < 10
     assert audit.starts == len(result.rounds)
     assert len(result.outputs["action_results"]) == len(result.rounds)
