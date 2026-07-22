@@ -228,18 +228,23 @@ class EvidenceProjection:
             raise ValueError("limit must be between 1 and 1000")
         query_fingerprint = _query_fingerprint(source, entity, time_range, scope)
         cursor_state = _decode_cursor(cursor, query_fingerprint)
-        snapshot_at = cursor_state["snapshot_at"] if cursor_state is not None else datetime.now(UTC)
+        if cursor_state is not None:
+            snapshot_at = cursor_state["snapshot_at"]
+            row_snapshot = snapshot_at
+        else:
+            snapshot_at = datetime.now(UTC)
+            row_snapshot = datetime.max.replace(tzinfo=UTC)
         rows = (
-            await self._history_rows(scope, snapshot_at)
+            await self._history_rows(scope, row_snapshot)
             if source == "history_cases"
-            else await self._source_rows(_SOURCE_CHANNELS[source], scope, snapshot_at)
+            else await self._source_rows(_SOURCE_CHANNELS[source], scope, row_snapshot)
         )
         rows = [
             row
             for row in rows
             if row.source_reference.source_tenant_id == scope.source_tenant_id
             and row.source_reference.connector_id in scope.connector_ids
-            and row.indexed_at <= snapshot_at
+            and (cursor_state is None or row.indexed_at < snapshot_at)
         ]
         rows = [row for row in rows if _eligible_for_source(source, row.record)]
         availability_rows = rows
@@ -266,12 +271,13 @@ class EvidenceProjection:
         ]
         page = candidates[:limit]
         has_more = len(candidates) > len(page)
+        cursor_snapshot = datetime.now(UTC) if cursor_state is None else snapshot_at
         next_cursor = (
             _encode_cursor(
                 query_fingerprint,
                 after=_pagination_key(source, page[-1]),
                 ceiling=ceiling,
-                snapshot_at=snapshot_at,
+                snapshot_at=cursor_snapshot,
             )
             if has_more and page and ceiling is not None
             else None
