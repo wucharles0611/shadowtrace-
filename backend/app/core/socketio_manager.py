@@ -21,7 +21,7 @@ import logging
 from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import jsonschema
 import socketio
@@ -61,7 +61,7 @@ def _sequence_key(event_id: str) -> str:
 @lru_cache(maxsize=1)
 def _events_schema() -> dict[str, Any]:
     """Load the Socket.IO envelope JSON Schema once per process."""
-    return json.loads(_SCHEMA_PATH.read_text(encoding="utf-8"))
+    return cast(dict[str, Any], json.loads(_SCHEMA_PATH.read_text(encoding="utf-8")))
 
 
 # ---------------------------------------------------------------------------
