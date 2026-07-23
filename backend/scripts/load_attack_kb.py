@@ -42,9 +42,7 @@ async def _main() -> None:
 
     settings = Settings()
     engine = create_async_engine(DATABASE_URL)
-    session_factory = async_sessionmaker(
-        bind=engine, expire_on_commit=False, autoflush=False
-    )
+    session_factory = async_sessionmaker(bind=engine, expire_on_commit=False, autoflush=False)
     embed_service = EmbeddingService(settings)
     store = KnowledgeStore(session_factory, embed_service)
     service = AttackKBService(store, session_factory)

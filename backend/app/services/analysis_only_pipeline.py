@@ -299,8 +299,7 @@ class AnalysisOnlyPipeline:
                         )
                     except Exception:
                         logger.error(
-                            "Failed to set redis_context_unavailable degraded flag "
-                            "for event=%s",
+                            "Failed to set redis_context_unavailable degraded flag for event=%s",
                             event_id,
                             exc_info=True,
                         )

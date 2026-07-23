@@ -11,7 +11,8 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Annotated, Any, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, status
-from sqlalchemy import exc as sa_exc, func, select
+from sqlalchemy import exc as sa_exc
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -26,8 +27,6 @@ from app.api.v1.errors import (
     WritebackPendingError,
     WritebackUnsupportedError,
 )
-from app.core.errors import DependencyUnavailableError
-
 from app.core.auth import (
     ROLE_ADMIN,
     ROLE_ANALYST,
@@ -37,6 +36,7 @@ from app.core.auth import (
     Principal,
     require_roles,
 )
+from app.core.errors import DependencyUnavailableError
 from app.db import models as orm
 from app.models.action import Action as ActionModel
 from app.models.disposition import SourceObjectLocator
@@ -83,8 +83,7 @@ def _try_get_session_factory() -> async_sessionmaker[AsyncSession] | None:
         return sf
     except (ImportError, ModuleNotFoundError):
         logger.warning(
-            "Database session factory unavailable (missing configuration) — "
-            "returning empty results"
+            "Database session factory unavailable (missing configuration) — returning empty results"
         )
         return None
     except (ValueError, TypeError):
@@ -95,8 +94,7 @@ def _try_get_session_factory() -> async_sessionmaker[AsyncSession] | None:
         # Transient infrastructure errors (network, filesystem) — degrade
         # gracefully so the API can still return empty results rather than 5xx.
         logger.warning(
-            "Database session factory unavailable (transient error) — "
-            "returning empty results",
+            "Database session factory unavailable (transient error) — returning empty results",
             exc_info=True,
         )
         return None
@@ -118,7 +116,7 @@ async def _generate_quick_close_report(
     risk_score: int,
     severity: Severity,
     operator: str,
-    event_service: "EventService",
+    event_service: EventService,
 ) -> None:
     """Generate a standard 15-section quick-close report so the CLOSED gate can pass.
 
@@ -595,7 +593,8 @@ async def close_event(
         if event.disposition_policy != DispositionPolicy.NOT_REQUIRED:
             raise WritebackUnsupportedError(
                 "TRIAGING→CLOSED requires disposition_policy=not_required; "
-                "required-disposition events must go through the disposition-only orchestration chain",
+                "required-disposition events must go through the disposition-only "
+                "orchestration chain",
                 details={
                     "event_id": event_id,
                     "disposition_policy": event.disposition_policy.value,

@@ -876,4 +876,6 @@ async def test_analysis_only_complete_persisted_in_context(
 
     # Verify persistence via EventContextStore.
     stored_value = await store.get(event_id, "analysis_only_complete")
-    assert stored_value is True, f"Expected analysis_only_complete=True in context, got {stored_value!r}"
+    assert stored_value is True, (
+        f"Expected analysis_only_complete=True in context, got {stored_value!r}"
+    )

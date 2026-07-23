@@ -1,4 +1,5 @@
-"""Agents package (ISSUE-005 / ISSUE-033 / ISSUE-034 / ISSUE-035 / ISSUE-036 / ISSUE-049 / ISSUE-057)."""
+"""Agents package (ISSUE-005 / ISSUE-033 / ISSUE-034 / ISSUE-035 / ISSUE-036 / ISSUE-049 /
+ISSUE-057)."""
 
 from app.agents.base import AgentOutput, BaseAgent
 from app.agents.confidence_calibration import calibrate_confidence

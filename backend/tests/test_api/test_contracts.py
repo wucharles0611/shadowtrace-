@@ -14,7 +14,6 @@ from pydantic import ValidationError
 
 from app.api.v1 import schemas as s
 from app.api.v1.deps import get_event_service as _real_get_event_service
-from app.api.v1.deps import get_pipeline as _real_get_pipeline
 from app.api.v1.deps import get_state_machine as _real_get_state_machine
 from app.api.v1.errors import register_exception_handlers
 from app.core.errors import ValidationError as DomainValidationError
@@ -23,11 +22,6 @@ from app.models.disposition import DispositionCommand
 from app.models.enums import (
     DispositionPolicy,
     EventStatus,
-    EventType,
-    FinalVerdict,
-    Severity,
-    SourceDisposition,
-    SourceObjectKind,
 )
 
 # (method, path) pairs for every core endpoint in intro §4.2.2.
@@ -121,7 +115,6 @@ class _MockEventService:
         return None
 
     async def list_events(self, **kwargs: Any) -> Any:
-        from dataclasses import dataclass
 
         @dataclass
         class _Result:
