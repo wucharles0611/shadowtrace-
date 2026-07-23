@@ -49,6 +49,8 @@ CORE_TABLES = {
     "event_context_journal",
     "event_context_field_version",
     "knowledge_chunk",
+    "graph_node",
+    "graph_edge",
 }
 
 

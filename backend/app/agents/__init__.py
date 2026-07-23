@@ -4,6 +4,8 @@ from app.agents.base import AgentOutput, BaseAgent
 from app.agents.confidence_calibration import calibrate_confidence
 from app.agents.evidence_agent import EvidenceAgent
 from app.agents.evidence_parser import EvidenceParser
+from app.agents.graph_agent import GraphAgent
+from app.agents.graph_builder import GraphBuilder
 from app.agents.planner_agent import PlannerAgent
 from app.agents.report_agent import ReportAgent
 from app.agents.report_section_builder import ReportSectionBuilder
@@ -36,7 +38,9 @@ __all__ = [
     "EvidenceAgent",
     "EvidenceAgentInput",
     "EvidenceParser",
+    "GraphAgent",
     "GraphAgentInput",
+    "GraphBuilder",
     "MemoryAgentInput",
     "PlannerAgent",
     "PlannerAgentInput",
