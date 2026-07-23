@@ -1,7 +1,9 @@
 """ShadowTrace FastAPI application entrypoint."""
 
+import asyncio
+import logging
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI
 
@@ -11,6 +13,10 @@ from app.api.v1.health import shutdown_health_clients
 from app.core.config import get_settings
 from app.core.redis_client import RedisClient
 from app.core.socketio_manager import SocketIOManager
+
+logger = logging.getLogger(__name__)
+
+APPROVAL_SCAN_INTERVAL_SECONDS = 60
 
 # ---------------------------------------------------------------------------
 # Lazy infrastructure singletons (connections established on first use)
@@ -35,11 +41,29 @@ async def _lifespan(application: FastAPI) -> AsyncIterator[None]:
     # Start the Redis→Socket.IO bridge background task.
     await _socketio_manager.start()
 
-    yield
+    async def _approval_timeout_scan_loop() -> None:
+        while True:
+            await asyncio.sleep(APPROVAL_SCAN_INTERVAL_SECONDS)
+            try:
+                from app.api.v1.deps import get_approval_engine
 
-    # Graceful shutdown.
-    await _socketio_manager.stop()
-    await shutdown_health_clients()
+                engine = await get_approval_engine()
+                await engine.scan_timeouts()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("approval timeout scan failed")
+
+    scan_task = asyncio.create_task(_approval_timeout_scan_loop())
+
+    try:
+        yield
+    finally:
+        scan_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await scan_task
+        await _socketio_manager.stop()
+        await shutdown_health_clients()
 
 
 app = FastAPI(title="ShadowTrace", version="0.1.0", lifespan=_lifespan)

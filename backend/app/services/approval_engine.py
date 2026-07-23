@@ -272,6 +272,7 @@ class ApprovalEngine:
                 now = datetime.now(UTC)
                 record.operator = SYSTEM_TIMEOUT_OPERATOR
                 record.comment = "approval timeout"
+                record.decision = ApprovalDecisionKind.AUTO_REJECT.value
                 record.decided_at = now
                 row.status = ActionStatus.REJECTED.value
                 row.updated_at = now
@@ -307,6 +308,7 @@ class ApprovalEngine:
                         continue
                     record.operator = SYSTEM_TIMEOUT_OPERATOR
                     record.comment = "approval timeout"
+                    record.decision = ApprovalDecisionKind.AUTO_REJECT.value
                     record.decided_at = now
                     action.status = ActionStatus.REJECTED.value
                     action.updated_at = now
@@ -368,7 +370,7 @@ class ApprovalEngine:
                         details={"action_id": action_id},
                     )
                 action = _action_from_orm(row)
-                record = await self._load_record_row(session, action_id, approval_cycle=0)
+                record = await self._load_pending_record_row(session, action_id)
 
                 if record is not None and record.decided_at is not None:
                     if decision_id and record.decision_id == decision_id:
@@ -676,6 +678,24 @@ class ApprovalEngine:
     async def _load_record(self, action_id: str, approval_cycle: int) -> ApprovalRecordORM | None:
         async with self._session_factory() as session:
             return await self._load_record_row(session, action_id, approval_cycle)
+
+    async def _load_pending_record_row(
+        self,
+        session: AsyncSession,
+        action_id: str,
+    ) -> ApprovalRecordORM | None:
+        return cast(
+            ApprovalRecordORM | None,
+            await session.scalar(
+                select(ApprovalRecordORM)
+                .where(
+                    ApprovalRecordORM.action_id == action_id,
+                    ApprovalRecordORM.decided_at.is_(None),
+                )
+                .order_by(ApprovalRecordORM.approval_cycle.desc())
+                .limit(1)
+            ),
+        )
 
     async def _load_record_row(
         self,

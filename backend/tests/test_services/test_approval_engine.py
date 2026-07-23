@@ -526,6 +526,105 @@ async def test_timeout_rejects_with_system_timeout(
         )
         assert record is not None
         assert record.operator == SYSTEM_TIMEOUT_OPERATOR
+        assert record.decision == ApprovalDecisionKind.AUTO_REJECT.value
+
+
+@pytest.mark.asyncio
+async def test_scan_timeouts_rejects_expired_waiting_approval(
+    session_factory: async_sessionmaker[AsyncSession],
+    store: EventContextStore,
+    engine: ApprovalEngine,
+) -> None:
+    event_id = await _create_event(session_factory, store)
+    action = await _insert_action(
+        session_factory,
+        event_id,
+        _action_model(event_id=event_id, action_level=ActionLevel.L4),
+    )
+    await engine.evaluate(action, _risk(), approval_cycle=0)
+    async with session_factory() as session:
+        async with session.begin():
+            record = await session.scalar(
+                select(ApprovalRecordORM).where(ApprovalRecordORM.action_id == action.action_id)
+            )
+            assert record is not None
+            record.timeout_at = datetime.now(UTC) - timedelta(minutes=1)
+
+    touched = await engine.scan_timeouts()
+    assert event_id in touched
+
+    async with session_factory() as session:
+        row = await session.get(orm.Action, action.action_id)
+        assert row is not None
+        assert row.status == ActionStatus.REJECTED.value
+        record = await session.scalar(
+            select(ApprovalRecordORM).where(ApprovalRecordORM.action_id == action.action_id)
+        )
+        assert record is not None
+        assert record.operator == SYSTEM_TIMEOUT_OPERATOR
+        assert record.decision == ApprovalDecisionKind.AUTO_REJECT.value
+
+
+@pytest.mark.asyncio
+async def test_l0_without_idempotency_requires_manual(
+    session_factory: async_sessionmaker[AsyncSession],
+    store: EventContextStore,
+    fake_bus: FakeEventBus,
+    cleanup: None,
+) -> None:
+    manifest = build_mock_capability_manifest().model_copy(
+        update={"supports_idempotency": False, "supports_lookup_by_idempotency": False}
+    )
+    engine = ApprovalEngine(
+        session_factory,
+        event_bus=fake_bus,  # type: ignore[arg-type]
+        context_store=store,
+        capability_manifest=manifest,
+    )
+    event_id = await _create_event(session_factory, store)
+    action = await _insert_action(
+        session_factory,
+        event_id,
+        _action_model(event_id=event_id, action_level=ActionLevel.L0),
+    )
+    decision = await engine.evaluate(action, _risk(), approval_cycle=0)
+    assert decision.decision is ApprovalDecisionKind.REQUIRE_APPROVAL
+
+    async with session_factory() as session:
+        row = await session.get(orm.Action, action.action_id)
+        assert row is not None
+        assert row.status == ActionStatus.WAITING_APPROVAL.value
+
+
+@pytest.mark.asyncio
+async def test_mixed_l0_l4_stays_waiting_until_l4_decided(
+    session_factory: async_sessionmaker[AsyncSession],
+    store: EventContextStore,
+    fake_bus: FakeEventBus,
+    engine: ApprovalEngine,
+) -> None:
+    event_id = await _create_event(session_factory, store)
+    l0 = await _insert_action(
+        session_factory,
+        event_id,
+        _action_model(event_id=event_id, action_level=ActionLevel.L0, action_name="auto"),
+    )
+    l4 = await _insert_action(
+        session_factory,
+        event_id,
+        _action_model(event_id=event_id, action_level=ActionLevel.L4, action_name="manual"),
+    )
+    await engine.evaluate(l0, _risk(), approval_cycle=0)
+    await engine.evaluate(l4, _risk(), approval_cycle=0)
+
+    async with session_factory() as session:
+        event = await session.get(orm.SecurityEvent, event_id)
+        assert event is not None
+        assert event.status == EventStatus.WAITING_APPROVAL.value
+        l0_row = await session.get(orm.Action, l0.action_id)
+        l4_row = await session.get(orm.Action, l4.action_id)
+        assert l0_row is not None and l0_row.status == ActionStatus.APPROVED.value
+        assert l4_row is not None and l4_row.status == ActionStatus.WAITING_APPROVAL.value
 
 
 @pytest.mark.asyncio

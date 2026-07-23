@@ -26,6 +26,7 @@ async def approve_action(
         body.comment,
         body.decision_id,
     )
+    await engine.scan_timeouts()
     return s.ActionOperationResponse(
         action_id=action_id,
         status="approved",
@@ -47,6 +48,7 @@ async def reject_action(
         body.comment,
         body.decision_id,
     )
+    await engine.scan_timeouts()
     return s.ActionOperationResponse(
         action_id=action_id,
         status="rejected",

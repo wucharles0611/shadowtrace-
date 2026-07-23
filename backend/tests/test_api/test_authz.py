@@ -40,7 +40,13 @@ def client() -> TestClient:
         async def reject(self, *args: object, **kwargs: object) -> None:
             return None
 
-    app.dependency_overrides[get_approval_engine] = lambda: _StubApprovalEngine()
+        async def scan_timeouts(self) -> list[str]:
+            return []
+
+    async def _stub_engine() -> _StubApprovalEngine:
+        return _StubApprovalEngine()
+
+    app.dependency_overrides[get_approval_engine] = _stub_engine
     yield TestClient(app)
     app.dependency_overrides.pop(get_approval_engine, None)
 
